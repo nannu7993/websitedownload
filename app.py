@@ -17,23 +17,25 @@ HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
+def is_same_domain(url1, url2):
+    """Check if two URLs belong to the same domain"""
+    domain1 = urllib.parse.urlparse(url1).netloc
+    domain2 = urllib.parse.urlparse(url2).netloc
+    return domain1 == domain2
+
 def save_data_url(data_url, zip_file, count, folder='images'):
     """Handle data URL images"""
     try:
-        # Extract the file type and data from the data URL
         header, encoded = data_url.split(',', 1)
         file_type = header.split(';')[0].split('/')[1]
         
-        # Handle SVG+XML specifically
         if 'svg+xml' in header:
             file_type = 'svg'
-            if '%3Csvg' in encoded:  # URL encoded SVG
-                import urllib.parse
+            if '%3Csvg' in encoded:
                 encoded = urllib.parse.unquote(encoded)
                 zip_file.writestr(f'{folder}/embedded_image_{count}.{file_type}', encoded)
                 return True
         
-        # Handle base64 encoded data
         if 'base64' in header:
             data = base64.b64decode(encoded)
             zip_file.writestr(f'{folder}/embedded_image_{count}.{file_type}', data)
@@ -43,89 +45,108 @@ def save_data_url(data_url, zip_file, count, folder='images'):
     except Exception as e:
         return False
 
-def download_assets(url):
-    zip_buffer = BytesIO()
+def process_page(url, base_url, zip_file, visited_urls, max_pages=10):
+    """Process a single page and its assets"""
+    if url in visited_urls or len(visited_urls) >= max_pages:
+        return
     
     try:
         response = requests.get(url, headers=HEADERS)
         response.raise_for_status()
+        visited_urls.add(url)
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        base_url = urllib.parse.urljoin(url, '/')
         
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            zip_file.writestr('html/index.html', response.text)
-            
-            # Download images
-            image_count = 0
-            for img in soup.find_all('img'):
-                src = img.get('src')
-                if src:
-                    try:
-                        if src.startswith('data:'):
-                            # Handle data URL
-                            if save_data_url(src, zip_file, image_count):
-                                image_count += 1
-                                continue
-                        
-                        img_url = urllib.parse.urljoin(base_url, src)
-                        img_name = os.path.basename(urllib.parse.urlparse(img_url).path)
-                        if not img_name:
-                            continue
-                        img_response = requests.get(img_url, headers=HEADERS)
-                        zip_file.writestr(f'images/{img_name}', img_response.content)
+        # Modify paths in HTML to be relative
+        page_path = url[len(base_url):] if url.startswith(base_url) else 'index.html'
+        page_path = page_path.lstrip('/') or 'index.html'
+        
+        # Process images
+        image_count = 0
+        for img in soup.find_all('img'):
+            src = img.get('src')
+            if src:
+                if src.startswith('data:'):
+                    # Handle data URLs
+                    if save_data_url(src, zip_file, image_count):
+                        new_src = f'images/embedded_image_{image_count}'
+                        img['src'] = new_src
                         image_count += 1
-                    except Exception as e:
-                        continue
-
-            # Download CSS
-            for css in soup.find_all('link', rel='stylesheet'):
-                href = css.get('href')
-                if href:
+                else:
+                    # Keep external links as they are
+                    full_url = urllib.parse.urljoin(url, src)
+                    if not is_same_domain(base_url, full_url):
+                        img['src'] = full_url
+        
+        # Save the modified HTML
+        zip_file.writestr(f'html/{page_path}', str(soup))
+        
+        # Download CSS files from same domain
+        for css in soup.find_all('link', rel='stylesheet'):
+            href = css.get('href')
+            if href:
+                css_url = urllib.parse.urljoin(url, href)
+                if is_same_domain(base_url, css_url):
                     try:
-                        css_url = urllib.parse.urljoin(base_url, href)
-                        css_name = os.path.basename(urllib.parse.urlparse(css_url).path)
-                        if not css_name:
-                            continue
                         css_response = requests.get(css_url, headers=HEADERS)
-                        zip_file.writestr(f'css/{css_name}', css_response.content)
+                        css_path = css_url[len(base_url):].lstrip('/')
+                        zip_file.writestr(f'css/{css_path}', css_response.content)
                     except Exception as e:
                         continue
-
-            # Download JavaScript
-            for js in soup.find_all('script', src=True):
-                src = js.get('src')
-                if src:
+        
+        # Download JavaScript files from same domain
+        for js in soup.find_all('script', src=True):
+            src = js.get('src')
+            if src:
+                js_url = urllib.parse.urljoin(url, src)
+                if is_same_domain(base_url, js_url):
                     try:
-                        js_url = urllib.parse.urljoin(base_url, src)
-                        js_name = os.path.basename(urllib.parse.urlparse(js_url).path)
-                        if not js_name:
-                            continue
                         js_response = requests.get(js_url, headers=HEADERS)
-                        zip_file.writestr(f'js/{js_name}', js_response.content)
+                        js_path = js_url[len(base_url):].lstrip('/')
+                        zip_file.writestr(f'js/{js_path}', js_response.content)
                     except Exception as e:
                         continue
+        
+        # Find and process internal links
+        for link in soup.find_all('a', href=True):
+            href = link.get('href')
+            full_url = urllib.parse.urljoin(url, href)
+            if is_same_domain(base_url, full_url) and full_url not in visited_urls:
+                process_page(full_url, base_url, zip_file, visited_urls, max_pages)
+                
+    except Exception as e:
+        st.warning(f"Error processing {url}: {str(e)}")
 
+def download_website(url, max_pages=10):
+    """Download entire website with related pages"""
+    zip_buffer = BytesIO()
+    visited_urls = set()
+    
+    try:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            process_page(url, url, zip_file, visited_urls, max_pages)
+            
         return zip_buffer.getvalue()
     except Exception as e:
         st.error(f"Error: {str(e)}")
         return None
 
 # Streamlit UI
-st.title('Website Asset Downloader')
+st.title('Website Downloader')
 
 url = st.text_input('Enter website URL (e.g., https://example.com)')
+max_pages = st.slider('Maximum number of pages to download', 1, 50, 10)
 
-if st.button('Download Assets'):
+if st.button('Download Website'):
     if url:
-        with st.spinner('Downloading assets...'):
-            zip_data = download_assets(url)
+        with st.spinner('Downloading website...'):
+            zip_data = download_website(url, max_pages)
             if zip_data:
                 st.success('Download ready!')
                 st.download_button(
                     label="Download ZIP file",
                     data=zip_data,
-                    file_name="website_assets.zip",
+                    file_name="website_content.zip",
                     mime="application/zip"
                 )
     else:
@@ -133,8 +154,15 @@ if st.button('Download Assets'):
 
 st.markdown("""
 ---
+### Features:
+- Downloads full website structure up to specified number of pages
+- Maintains external links as-is
+- Downloads internal CSS, JavaScript, and embedded images
+- Preserves website structure in the ZIP file
+- Handles data URLs and embedded content
+
 ### Notes:
-- The downloader will save both regular image files and embedded images
 - Some websites may block automated downloads
-- Make sure you have permission to download content from the website
+- Make sure you have permission to download content
+- Large websites may take longer to process
 """)
