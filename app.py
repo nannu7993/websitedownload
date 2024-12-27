@@ -1,11 +1,10 @@
-from flask import Flask, render_template, request, send_file
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import urllib.parse
 from io import BytesIO
 import zipfile
-
-app = Flask(__name__)
+import os
 
 def download_assets(url):
     # Create in-memory zip file
@@ -68,71 +67,25 @@ def download_assets(url):
 
         return zip_buffer.getvalue()
     except Exception as e:
-        print(f"Error: {e}")
+        st.error(f"Error: {e}")
         return None
 
-app = Flask(__name__)
+# Streamlit UI
+st.title('Website Asset Downloader')
 
-@app.route('/')
-def index():
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Website Asset Downloader</title>
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                max-width: 800px;
-                margin: 0 auto;
-                padding: 20px;
-            }
-            .container {
-                text-align: center;
-            }
-            input[type="text"] {
-                width: 80%;
-                padding: 10px;
-                margin: 10px 0;
-            }
-            input[type="submit"] {
-                padding: 10px 20px;
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                cursor: pointer;
-            }
-            input[type="submit"]:hover {
-                background-color: #45a049;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Website Asset Downloader</h1>
-            <form method="POST">
-                <input type="text" name="url" placeholder="Enter website URL (e.g., https://example.com)" required>
-                <br>
-                <input type="submit" value="Download Assets">
-            </form>
-        </div>
-    </body>
-    </html>
-    '''
+url = st.text_input('Enter website URL (e.g., https://example.com)')
 
-@app.route('/', methods=['POST'])
-def download():
-    url = request.form['url']
-    zip_data = download_assets(url)
-    
-    if zip_data:
-        return send_file(
-            BytesIO(zip_data),
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name='website_assets.zip'
-        )
-    return "Error downloading assets. Please check the URL and try again."
-
-if __name__ == '__main__':
-    app.run(debug=True)
+if st.button('Download Assets'):
+    if url:
+        with st.spinner('Downloading assets...'):
+            zip_data = download_assets(url)
+            if zip_data:
+                st.success('Download ready!')
+                st.download_button(
+                    label="Download ZIP file",
+                    data=zip_data,
+                    file_name="website_assets.zip",
+                    mime="application/zip"
+                )
+    else:
+        st.warning('Please enter a URL')
