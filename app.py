@@ -6,16 +6,24 @@ from io import BytesIO
 import zipfile
 import os
 
+# Define headers to mimic a regular browser
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+}
+
 def download_assets(url):
-    # Create in-memory zip file
     zip_buffer = BytesIO()
     
     try:
-        # Download main page
-        response = requests.get(url)
+        # Download main page with headers
+        response = requests.get(url, headers=HEADERS)
         response.raise_for_status()
         
-        # Parse HTML
         soup = BeautifulSoup(response.text, 'html.parser')
         base_url = urllib.parse.urljoin(url, '/')
         
@@ -32,9 +40,10 @@ def download_assets(url):
                         img_name = os.path.basename(urllib.parse.urlparse(img_url).path)
                         if not img_name:
                             continue
-                        img_response = requests.get(img_url)
+                        img_response = requests.get(img_url, headers=HEADERS)  # Added headers
                         zip_file.writestr(f'images/{img_name}', img_response.content)
-                    except:
+                    except Exception as e:
+                        st.warning(f"Failed to download image: {img_url}")
                         continue
 
             # Download CSS
@@ -46,9 +55,10 @@ def download_assets(url):
                         css_name = os.path.basename(urllib.parse.urlparse(css_url).path)
                         if not css_name:
                             continue
-                        css_response = requests.get(css_url)
+                        css_response = requests.get(css_url, headers=HEADERS)  # Added headers
                         zip_file.writestr(f'css/{css_name}', css_response.content)
-                    except:
+                    except Exception as e:
+                        st.warning(f"Failed to download CSS: {css_url}")
                         continue
 
             # Download JavaScript
@@ -60,14 +70,15 @@ def download_assets(url):
                         js_name = os.path.basename(urllib.parse.urlparse(js_url).path)
                         if not js_name:
                             continue
-                        js_response = requests.get(js_url)
+                        js_response = requests.get(js_url, headers=HEADERS)  # Added headers
                         zip_file.writestr(f'js/{js_name}', js_response.content)
-                    except:
+                    except Exception as e:
+                        st.warning(f"Failed to download JavaScript: {js_url}")
                         continue
 
         return zip_buffer.getvalue()
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error: {str(e)}")
         return None
 
 # Streamlit UI
@@ -89,3 +100,12 @@ if st.button('Download Assets'):
                 )
     else:
         st.warning('Please enter a URL')
+
+# Add some helpful information
+st.markdown("""
+---
+### Notes:
+- Some websites may block automated downloads
+- If you get a 403 error, the website might be protecting against automated access
+- Make sure you have permission to download content from the website
+""")
